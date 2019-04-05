@@ -1,0 +1,29 @@
+{
+  "name": "mibo",
+  "version": "1.0.0",
+  "description": "Mimicry robot running on PoseNet ported to TensorFlow.js",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/jonbenfri/mibo.git"
+  },
+  "keywords": [
+    "robot",
+    "tensorflow",
+    "machine-learning",
+    "computer-vision"
+  ],
+  "author": "Jonathan Friedman",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/jonbenfri/mibo/issues"
+  },
+  "homepage": "https://github.com/jonbenfri/mibo#readme",
+  "dependencies": {
+    "@tensorflow-models/posenet": "^1.0.0",
+    "@tensorflow/tfjs-node-gpu": "^1.0.3"
+  }
+}
