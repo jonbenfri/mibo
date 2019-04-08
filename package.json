@@ -24,6 +24,7 @@
   "homepage": "https://github.com/jonbenfri/mibo#readme",
   "dependencies": {
     "@tensorflow-models/posenet": "^1.0.0",
-    "@tensorflow/tfjs-node-gpu": "^1.0.3"
+    "@tensorflow/tfjs-node-gpu": "^1.0.3",
+    "yalc": "^1.0.0-pre.27"
   }
 }
