@@ -38,8 +38,8 @@ strings = [
 
 bone_lengths = [np.linalg.norm(points[a] - points[b]) for a, b in bones]
 
-dt = 0.03
-g = 1.5  # gravity
+dt = 0.01
+g = -1.5  # gravity
 
 def verlet(points, prev_points, dt):
     return points + (points - prev_points) + np.array([0, g * dt**2])
@@ -87,9 +87,14 @@ def update(frame):
     apply_string_constraints(points, strings, string_lengths)
 
     # Satisfy limb lengths (several passes)
-    for _ in range(6):
+    for _ in range(30):
         apply_bone_constraints(points, bones, bone_lengths)
         apply_string_constraints(points, strings, string_lengths)
+
+    for i, (a, b) in enumerate(bones):
+        actual = np.linalg.norm(points[a] - points[b])
+        print(f"Bone {i} length: {actual:.4f} (should be {bone_lengths[i]:.4f})")
+
 
     ax.clear()
     ax.set_xlim(-0.5, 0.5)
