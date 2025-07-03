@@ -1,114 +1,137 @@
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+"""
+robot_sim.py – 2-D servo-marionette using pymunk + pygame
+---------------------------------------------------------
+• Green segments = perfectly rigid limbs (PinJoint)
+• Red dashed     = strings whose .max length you vary each frame
+"""
+import math, sys, pygame, pymunk
+from   pymunk.pygame_util import DrawOptions
 
-# Stick figure: Head, Shoulder, Hand_L, Hand_R, Hip, Foot_L, Foot_R
+# ------------------------------------------------------------------
+# Window / physics constants
+# ------------------------------------------------------------------
+WIDTH, HEIGHT = 700, 800          # pixels
+PPM           = 300               # pixels per metre
+FPS           = 60
+DT            = 1.0 / FPS
+GRAVITY       = (0, -9.81)        # Chipmunk +Y up
 
-# Initial positions (y points downward)
-points = np.array([
-    [0, -0.1],   # Head
-    [0, -0.3],   # Shoulder
-    [-0.2, -0.5], # Hand_L
-    [0.2, -0.5],  # Hand_R
-    [0, -0.9],   # Hip
-    [-0.1, -1.2], # Foot_L
-    [0.1, -1.2],  # Foot_R
-])
+# ------------------------------------------------------------------
+# Pygame & pymunk setup
+# ------------------------------------------------------------------
+pygame.init()
+screen  = pygame.display.set_mode((WIDTH, HEIGHT))
+clock   = pygame.time.Clock()
+options = DrawOptions(screen)
 
-prev_points = points.copy()
+space = pymunk.Space()
+space.gravity = GRAVITY
+static_body   = space.static_body    # needed for static anchors
 
-# Limb constraints (pairs of indices, fixed length)
-bones = [
-    (0, 1),  # Head-Shoulder
-    (1, 2),  # Shoulder-Hand_L
-    (1, 3),  # Shoulder-Hand_R
-    (1, 4),  # Shoulder-Hip
-    (4, 5),  # Hip-Foot_L
-    (4, 6),  # Hip-Foot_R
-]
+def to_px(p):
+    """Chipmunk coords → pygame pixels (origin centre, +Y up)."""
+    return int(p.x * PPM + WIDTH / 2), int(HEIGHT / 2 - p.y * PPM)
 
-# String attachments: (point index, fixed point)
-strings = [
-    (2, [-0.3, 0.0]),  # Hand_L
-    (3, [0.3, 0.0]),   # Hand_R
-    (5, [-0.1, 0.0]),  # Foot_L
-    (6, [0.1, 0.0]),   # Foot_R
-    (0, [0.0, 0.0]),   # Head
-]
+# ------------------------------------------------------------------
+# Static “control-bar” anchor points  (now Vec2d, not tuples!)
+# ------------------------------------------------------------------
+anchor_world = {
+    "head" : pymunk.Vec2d( 0.00,  0.00),
+    "handL": pymunk.Vec2d(-0.30,  0.00),
+    "handR": pymunk.Vec2d( 0.30,  0.00),
+    "footL": pymunk.Vec2d(-0.10,  0.00),
+    "footR": pymunk.Vec2d( 0.10,  0.00),
+}
 
-bone_lengths = [np.linalg.norm(points[a] - points[b]) for a, b in bones]
+# ------------------------------------------------------------------
+# Helper to create a circular body for each joint
+# ------------------------------------------------------------------
+def make_joint(pos, mass=0.02, radius=0.015):
+    moment = pymunk.moment_for_circle(mass, 0, radius)
+    body   = pymunk.Body(mass, moment)
+    body.position = pos
+    shape  = pymunk.Circle(body, radius)
+    shape.filter = pymunk.ShapeFilter(group=1)   # prevent self-collision
+    space.add(body, shape)
+    return body
 
-dt = 0.01
-g = -1.5  # gravity
+# ------------------------------------------------------------------
+# Build stick-figure joints
+# ------------------------------------------------------------------
+j = {}   # shorthand dict
+j["head"]   = make_joint(( 0.00, -0.10))
+j["should"] = make_joint(( 0.00, -0.30))
+j["handL"]  = make_joint((-0.20, -0.50))
+j["handR"]  = make_joint(( 0.20, -0.50))
+j["hip"]    = make_joint(( 0.00, -0.90))
+j["footL"]  = make_joint((-0.10, -1.20))
+j["footR"]  = make_joint(( 0.10, -1.20))
 
-def verlet(points, prev_points, dt):
-    return points + (points - prev_points) + np.array([0, g * dt**2])
+# Rigid limbs (PinJoint keeps exact distance)
+for a, b in [("head","should"), ("should","handL"), ("should","handR"),
+             ("should","hip"),   ("hip","footL"),  ("hip","footR")]:
+    space.add(pymunk.PinJoint(j[a], j[b]))
 
-def apply_string_constraints(points, strings, string_lengths):
-    for i, (pi, anchor) in enumerate(strings):
-        vec = points[pi] - anchor
-        dist = np.linalg.norm(vec)
-        max_len = string_lengths[i]
-        if dist > max_len:
-            direction = vec / dist
-            points[pi] = anchor + direction * max_len
+# ------------------------------------------------------------------
+# Strings implemented as SlideJoint (min=0, max=L)
+# We keep handles so we can change .max each frame like servo spools.
+# ------------------------------------------------------------------
+strings = {}
+def add_string(name, anchor_key, initial_len):
+    sj = pymunk.SlideJoint(static_body, j[name],
+                           anchor_world[anchor_key], (0,0),
+                           0.0, initial_len)      # min, max
+    sj.collide_bodies = False
+    space.add(sj)
+    strings[name] = sj
 
-def apply_bone_constraints(points, bones, bone_lengths):
-    for i, (a, b) in enumerate(bones):
-        pa, pb = points[a], points[b]
-        delta = pb - pa
-        dist = np.linalg.norm(delta)
-        if dist == 0: continue
-        diff = (dist - bone_lengths[i]) / 2
-        correction = delta / dist * diff
-        # Move both ends (unless string-attached)
-        points[a] += correction
-        points[b] -= correction
+add_string("handL","handL", 0.50)
+add_string("handR","handR", 0.50)
+add_string("footL","footL", 0.70)
+add_string("footR","footR", 0.70)
+add_string("head" ,"head" , 0.35)
 
-# Initial string lengths: measured from anchors to attachment points
-string_lengths = [np.linalg.norm(points[pi] - anchor) for pi, anchor in strings]
+# ------------------------------------------------------------------
+# Simple “wave both hands” demo by modulating two string lengths
+# ------------------------------------------------------------------
+def update_servos(t):
+    strings["handL"].max = 0.50 + 0.05*math.sin(t*2.0)
+    strings["handR"].max = 0.50 + 0.05*math.cos(t*2.6)
+    # To animate feet or head, adjust their .max similarly.
 
-fig, ax = plt.subplots()
-ax.set_xlim(-0.5, 0.5)
-ax.set_ylim(-1.5, 0.2)
+# ------------------------------------------------------------------
+# Main loop
+# ------------------------------------------------------------------
+running, t = True, 0.0
+SEGMENTS = [("head","should"), ("should","handL"), ("should","handR"),
+            ("should","hip"),  ("hip","footL"),    ("hip","footR")]
 
-def update(frame):
-    global points, prev_points, string_lengths
+while running:
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            running = False
 
-    # Animate: wave hands
-    string_lengths[0] = 0.5 + 0.05 * np.sin(frame / 10)  # Left hand
-    string_lengths[1] = 0.5 + 0.05 * np.cos(frame / 13)  # Right hand
+    update_servos(t)
+    space.step(DT)
+    t += DT
 
-    temp = points.copy()
-    points = verlet(points, prev_points, dt)
-    prev_points = temp
+    # ------------------------------------------------------------------
+    # Drawing
+    # ------------------------------------------------------------------
+    screen.fill((240,240,240))
 
-    # Apply string constraints (limit how far each joint can fall)
-    apply_string_constraints(points, strings, string_lengths)
+    # Draw rigid limbs (green)
+    for a, b in SEGMENTS:
+        pygame.draw.line(screen, (0,180,0), to_px(j[a].position),
+                                           to_px(j[b].position), 5)
+    # Draw strings (red dashed)
+    for name, sj in strings.items():
+        pygame.draw.line(screen, (200,0,0), to_px(anchor_world[name]),
+                                            to_px(j[name].position), 2)
 
-    # Satisfy limb lengths (several passes)
-    for _ in range(30):
-        apply_bone_constraints(points, bones, bone_lengths)
-        apply_string_constraints(points, strings, string_lengths)
+    pygame.display.flip()
+    clock.tick(FPS)
 
-    for i, (a, b) in enumerate(bones):
-        actual = np.linalg.norm(points[a] - points[b])
-        print(f"Bone {i} length: {actual:.4f} (should be {bone_lengths[i]:.4f})")
-
-
-    ax.clear()
-    ax.set_xlim(-0.5, 0.5)
-    ax.set_ylim(-1.5, 0.2)
-    # Draw strings
-    for i, (pi, anchor) in enumerate(strings):
-        ax.plot([anchor[0], points[pi][0]], [anchor[1], points[pi][1]], 'r--')
-        ax.plot(anchor[0], anchor[1], 'ko')
-    # Draw bones
-    for a, b in bones:
-        ax.plot([points[a][0], points[b][0]], [points[a][1], points[b][1]], 'g-', lw=2)
-    # Draw joints
-    ax.plot(points[:,0], points[:,1], 'bo')
-
-ani = FuncAnimation(fig, update, frames=300, interval=40)
-plt.show()
+pygame.quit()
+sys.exit()
 
