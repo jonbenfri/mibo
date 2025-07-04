@@ -45,15 +45,18 @@ verts = ['HIP','SHOULDER','HEAD',
 def anchors_of(x):
     return x - ANCH_XSEP/2, x + ANCH_XSEP/2
 
-# ─── forward kinematics ─────────────────────────────────────
+# ─── forward kinematics (torso pivots about its midpoint = origin) ───
 def fk(p):
-    thT = np.deg2rad(p['torso'])
-    Px, Py = 0.0, 0.0
-    Sx = Px + L_TORSO*np.sin(thT)
-    Sy = Py + L_TORSO*np.cos(thT)
-    Hx, Hy = Sx, Sy + L_NECK
+    thT = np.deg2rad(p['torso'])          # torso orientation
+    # shoulder and hip are equally distant from origin
+    Sx =  +0.5*L_TORSO*np.sin(thT)
+    Sy =  +0.5*L_TORSO*np.cos(thT)
+    Px =  -0.5*L_TORSO*np.sin(thT)
+    Py =  -0.5*L_TORSO*np.cos(thT)
 
-    # arms (angles relative to torso normal)
+    Hx, Hy =  Sx, Sy + L_NECK             # head directly above shoulder
+
+    # left arm (angles measured from torso normal)
     shL = thT + np.deg2rad(p['sh_L'])
     ELx = Sx + L_UARM*np.sin(shL)
     ELy = Sy - L_UARM*np.cos(shL)
@@ -61,6 +64,7 @@ def fk(p):
     HLx = ELx + L_LARM*np.sin(eL)
     HLy = ELy - L_LARM*np.cos(eL)
 
+    # right arm
     shR = thT - np.deg2rad(p['sh_R'])
     ERx = Sx + L_UARM*np.sin(shR)
     ERy = Sy - L_UARM*np.cos(shR)
@@ -68,7 +72,7 @@ def fk(p):
     HRx = ERx + L_LARM*np.sin(eR)
     HRy = ERy - L_LARM*np.cos(eR)
 
-    # legs
+    # left leg (angles from torso axis)
     hipL = thT - np.deg2rad(p['hip_L'])
     KLx  = Px + L_ULEG*np.sin(hipL)
     KLy  = Py - L_ULEG*np.cos(hipL)
@@ -76,6 +80,7 @@ def fk(p):
     FLx  = KLx + L_LLEG*np.sin(kL)
     FLy  = KLy - L_LLEG*np.cos(kL)
 
+    # right leg
     hipR = thT + np.deg2rad(p['hip_R'])
     KRx  = Px + L_ULEG*np.sin(hipR)
     KRy  = Py - L_ULEG*np.cos(hipR)
@@ -84,12 +89,13 @@ def fk(p):
     FRy  = KRy - L_LLEG*np.cos(kR)
 
     return {
-        'HIP':(Px,Py),'SHOULDER':(Sx,Sy),'HEAD':(Hx,Hy),
-        'ELBOW_L':(ELx,ELy),'HAND_L':(HLx,HLy),
-        'ELBOW_R':(ERx,ERy),'HAND_R':(HRx,HRy),
-        'KNEE_L':(KLx,KLy),'FOOT_L':(FLx,FLy),
-        'KNEE_R':(KRx,KRy),'FOOT_R':(FRx,FRy)
+        'HIP':(Px,Py),          'SHOULDER':(Sx,Sy), 'HEAD':(Hx,Hy),
+        'ELBOW_L':(ELx,ELy),    'HAND_L':(HLx,HLy),
+        'ELBOW_R':(ERx,ERy),    'HAND_R':(HRx,HRy),
+        'KNEE_L':(KLx,KLy),     'FOOT_L':(FLx,FLy),
+        'KNEE_R':(KRx,KRy),     'FOOT_R':(FRx,FRy)
     }
+
 
 # ─── matplotlib scene ───────────────────────────────────────
 fig, ax = plt.subplots(figsize=(7,7))
@@ -109,17 +115,22 @@ lines = [ax.plot([],[],'b-',lw=4)[0] for _ in range(10)]   # skeleton
 strings = [ax.plot([],[],'r--')[0] for _ in range(len(verts)*2)]
 
 # ─── sliders ------------------------------------------------
+cols, rows = 5, 2
+dx, dy     = 0.13, 0.10          # slider width & height
+x0, y0     = 0.02, 0.92          # top-left of grid
 specs = [
-    ("Torso°",-90,90,-25),
-    ("sh_L°",-120,0,-40), ("el_L°",-120,0,-50),
-    ("sh_R°",-120,0,-40), ("el_R°",-120,0,-50),
-    ("hip_L°",-60,60,20), ("kn_L°",-120,0,-40),
-    ("hip_R°",-60,60,20), ("kn_R°",-120,0,-40),
+    ("Torso°", -90,  90, -25),
+    ("sh_L°", -120,   0, -40), ("el_L°", -120,   0, -50),
+    ("sh_R°", -120,   0, -40), ("el_R°", -120,   0, -50),
+    ("hip_L°", -60,  60,  20), ("kn_L°", -120,   0, -40),
+    ("hip_R°", -60,  60,  20), ("kn_R°", -120,   0, -40),
 ]
-sliders={}
+sliders = {}
 for i,(lab,lo,hi,val) in enumerate(specs):
-    ax_s = plt.axes([0.02+i*0.1, 0.92, 0.08, 0.03])
-    sliders[lab]=Slider(ax_s,lab,lo,hi,valinit=val)
+    col, row = divmod(i, cols)
+    ax_s = plt.axes([x0 + col*dx, y0 - row*dy, dx*0.9, 0.03])
+    sliders[lab] = Slider(ax_s, lab, lo, hi, valinit=val)
+
 
 # parameter holder
 P=dict(torso = sliders["Torso°"].val,
