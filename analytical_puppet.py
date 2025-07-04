@@ -1,199 +1,82 @@
 #!/usr/bin/env python3
 """
-analytical_puppet.py – single bar with TWO strings per vertex (4 strings)
+pose_driven_puppet.py – single bar, four overhead strings
+────────────────────────────────────────────────────────────
+Sliders control the bar’s pose (Px, Py, θ).  For each pose we
+compute the exact lengths to the four fixed anchors.
 
-Version 2.7.3
-──────────────────────────────────────────────────────────────
-• Stores FuncAnimation in variable `ani`  → animation runs
-• cache_frame_data=False removes Matplotlib warning
-• Everything else (4 anchor dots, sliders, reset, slew-limit,
-  runaway guard) same as v2.7.2
+Px  : midpoint X position       (slider “X”)
+Py  : midpoint Y position       (slider “Y”)
+θ   : bar rotation (rad)        (slider “θ”)
+
+All geometry updates instantly – no physics, no solver, no resets.
 """
 
 import numpy as np
-import sympy as sp
-import sympy.physics.mechanics as me
-from scipy.integrate import RK45
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-from matplotlib.widgets import Slider, Button
+from matplotlib.widgets import Slider
 
-# ---------------- parameters -------------------------------------------------
-L, X0, BAR_Y   = 0.35, 0.20, 0.75
-MASS           = 0.05
-STRING_DAMP    = 0.02
-SPOOL_RATE     = 0.35          # m·s⁻¹ spool speed
-ALPHA_B = BETA_B = 15.0
-FPS, DT        = 60, 1/60
-MIN_LEN, MAX_LEN = 0.10, 1.00
-VIEW_X, VIEW_Y   = 1.2, 1.4
+# --------- geometry constants
+BAR_LEN = 0.35
+ANCH_SP = 0.20
+BAR_Y0  = 0.75                    # vertical position of anchors
 
-# ---------------- symbolic dynamics -----------------------------------------
-t = sp.symbols('t')
-x, y, th       = me.dynamicsymbols('x y th')
-u1, u2, u3     = me.dynamicsymbols('u1 u2 u3')
-
-N = me.ReferenceFrame('N')
-A = N.orientnew('A', 'Axis', (th, N.z))
-
-O = me.Point('O')
-P = me.Point('P');  P.set_pos(O, x*N.x + y*N.y);  P.set_vel(N, u1*N.x + u2*N.y)
-H = P.locatenew('H', L*sp.cos(th)*N.x + L*sp.sin(th)*N.y)
-H.v2pt_theory(P, N, A)
-
-arm = me.RigidBody('arm', P, A, MASS, (me.inertia(N, 0, 0, 1e-3), P))
-
-# anchor coordinates (4 dots)
-q_init = np.array([0.0, 0.0, -0.4])
-Px0 = q_init[0]
-Hx0 = Px0 + L*np.cos(q_init[2])
+# anchor layout: two above each vertex
 anchors = {
-    'P_L': (Px0 - X0/2, BAR_Y), 'P_R': (Px0 + X0/2, BAR_Y),
-    'H_L': (Hx0 - X0/2, BAR_Y), 'H_R': (Hx0 + X0/2, BAR_Y)
+    'P_L': (-ANCH_SP/2, BAR_Y0),
+    'P_R': ( ANCH_SP/2, BAR_Y0),
+    'H_L': (-ANCH_SP/2, BAR_Y0),
+    'H_R': ( ANCH_SP/2, BAR_Y0)
 }
-points = {'P': P, 'H': H}
 
-phi_list, L_syms = [], {}
-for tag, (ax, ay) in anchors.items():
-    joint, _ = tag.split('_')
-    pt = points[joint]
-    dist = sp.sqrt((pt.pos_from(O).dot(N.x)-ax)**2 +
-                   (pt.pos_from(O).dot(N.y)-ay)**2)
-    Ls = sp.symbols(f'L_{tag}')
-    L_syms[tag] = Ls
-    phi_list.append(dist - Ls)
-phi = sp.Matrix(phi_list)
+# ---------------- matplotlib set-up
+fig, ax = plt.subplots(figsize=(6,6))
+plt.subplots_adjust(left=0.25, bottom=0.35)   # leave room for 3 sliders
+ax.set_aspect('equal')
+ax.set_xlim(-1.0, 1.0); ax.set_ylim(-0.3, 1.2)
+ax.set_title("Bar pose → string lengths")
 
-q = sp.Matrix([x, y, th])
-u = sp.Matrix([u1, u2, u3])
-km = me.KanesMethod(N, q_ind=q, u_ind=u,
-                    kd_eqs=[u1 - x.diff(t), u2 - y.diff(t), u3 - th.diff(t)])
-km.kanes_equations([arm], loads=[])
+# draw static anchor dots
+ax.scatter(*zip(*anchors.values()), c='k', zorder=3)
 
-Mfn  = sp.lambdify(list(q)+list(u), km.mass_matrix, 'numpy')
-Ffn  = sp.lambdify(list(q)+list(u), km.forcing,      'numpy')
-Jfn  = sp.lambdify(list(q)+list(u)+list(L_syms.values()),
-                   phi.jacobian(q), 'numpy')
-PHfn = sp.lambdify(list(q)+list(u)+list(L_syms.values()), phi, 'numpy')
+# dynamic artists
+bar_line,  = ax.plot([], [], 'b-', lw=4)
+str_lines   = [ax.plot([], [], 'r--')[0] for _ in range(4)]
 
-# ---------------- simulation helpers ----------------------------------------
-def make_initial():
-    q0 = q_init.copy()
-    u0 = np.zeros(3)
-    L0 = {}
-    for tag, (ax, ay) in anchors.items():
-        joint, _ = tag.split('_')
-        px, py = (q0[0], q0[1]) if joint == 'P' else (
-                  q0[0] + L*np.cos(q0[2]), q0[1] + L*np.sin(q0[2]))
-        L0[tag] = float(np.hypot(px-ax, py-ay))
-    return q0, u0, L0.copy(), L0.copy()
+# ---------------- sliders for Px, Py, θ
+ax_x = plt.axes([0.25, 0.25, 0.65, 0.03]);   s_x = Slider(ax_x, "X", -0.8, 0.8,  valinit=0.0)
+ax_y = plt.axes([0.25, 0.20, 0.65, 0.03]);   s_y = Slider(ax_y, "Y", -0.1, 0.8,  valinit=0.0)
+ax_t = plt.axes([0.25, 0.15, 0.65, 0.03]);   s_t = Slider(ax_t, "θ (deg)", -90, 90, valinit=-23)
 
-def rhs(_, s, Lcmd):
-    qv, uv = s[:3], s[3:]
-    vec = np.r_[qv, uv]
+def update(_):
+    # read pose
+    Px = s_x.val
+    Py = s_y.val
+    th = np.deg2rad(s_t.val)
+    # endpoints
+    dx = 0.5*BAR_LEN*np.cos(th)
+    dy = 0.5*BAR_LEN*np.sin(th)
+    Px_v = (Px - dx, Py - dy)  # vertex P
+    Hx_v = (Px + dx, Py + dy)  # vertex H
+    # draw bar
+    bar_line.set_data([Px_v[0], Hx_v[0]], [Px_v[1], Hx_v[1]])
+    # string lines & lengths
+    lengths = {}
+    for ln, (tag,(ax_,ay_)) in zip(str_lines, anchors.items()):
+        joint = tag[0]          # 'P' or 'H'
+        vx, vy = Px_v if joint=='P' else Hx_v
+        ln.set_data([ax_, vx], [ay_, vy])
+        lengths[tag] = np.hypot(vx-ax_, vy-ay_)
+    # print nicely
+    print(f"Lengths  (m):  P_L={lengths['P_L']:.3f}  P_R={lengths['P_R']:.3f}  ",
+          f"H_L={lengths['H_L']:.3f}  H_R={lengths['H_R']:.3f}", end='\r')
+    fig.canvas.draw_idle()
 
-    # small viscous damping along strings
-    for tag, (ax, ay) in anchors.items():
-        joint, _ = tag.split('_')
-        px, py = (qv[0], qv[1]) if joint == 'P' else (
-                  qv[0] + L*np.cos(qv[2]), qv[1] + L*np.sin(qv[2]))
-        vx, vy = (uv[0], uv[1]) if joint == 'P' else (
-                  uv[0] - L*uv[2]*np.sin(qv[2]),
-                  uv[1] + L*uv[2]*np.cos(qv[2]))
-        rel = np.array([px-ax, py-ay]); n = np.linalg.norm(rel)
-        if n > 1e-9:
-            Lcmd[tag] = np.clip(
-                Lcmd[tag] - STRING_DAMP * (rel/n).dot([vx, vy]) * DT,
-                MIN_LEN, MAX_LEN
-            )
+# connect sliders
+for s in (s_x, s_y, s_t):
+    s.on_changed(update)
 
-    Lvals = [Lcmd[k] for k in L_syms]
-    M  = Mfn(*vec).astype(float)
-    Fv = Ffn(*vec).astype(float).flatten()
-    J  = Jfn(*(vec.tolist() + Lvals)).astype(float)
-    ph = PHfn(*(vec.tolist() + Lvals)).astype(float).flatten()
-    gamma = -2*ALPHA_B*(J @ uv) - (BETA_B**2)*ph
-
-    sol, *_ = np.linalg.lstsq(
-        np.block([[M, J.T],
-                  [J, np.zeros((4,4))]]),
-        np.hstack([Fv, -gamma]), rcond=None)
-    return np.hstack([uv, sol[:3]])
-
-# initial state
-q0, u0, L_target, L_cmd = make_initial()
-state  = np.hstack([q0, u0])
-solver = RK45(lambda t, s: rhs(t, s, L_cmd),
-              0.0, state, np.inf, max_step=DT)
-
-# ---------------- GUI & drawing --------------------------------------------
-fig = plt.figure(figsize=(6, 6))
-gs  = fig.add_gridspec(7, 1,
-        height_ratios=[6] + [0.4]*4 + [0.2] + [0.4], hspace=0.3)
-
-ax = fig.add_subplot(gs[0]); ax.set_aspect('equal')
-ax.set_xlim(-VIEW_X, VIEW_X); ax.set_ylim(-0.6, VIEW_Y)
-ax.scatter(*zip(*anchors.values()), color='k', zorder=3)  # four dots
-
-arm_line, = ax.plot([], [], 'b-', lw=4)
-str_lines = [ax.plot([], [], 'r--')[0] for _ in range(4)]
-
-slider_axes = [fig.add_subplot(gs[i]) for i in range(1, 5)]
-sliders = {}
-for ax_, tag in zip(slider_axes, L_target):
-    sliders[tag] = Slider(ax_, tag,
-                          MIN_LEN, MAX_LEN,
-                          valinit=L_target[tag])
-def on_slider(_):
-    for tag in L_target:
-        L_target[tag] = sliders[tag].val
-for s in sliders.values():
-    s.on_changed(on_slider)
-
-def reset(event=None):
-    global state, solver, L_target, L_cmd
-    q0, u0, L_target, L_cmd = make_initial()
-    state  = np.hstack([q0, u0])
-    solver = RK45(lambda t, s: rhs(t, s, L_cmd),
-                  0.0, state, np.inf, max_step=DT)
-    for tag, val in L_target.items():
-        sliders[tag].set_val(val)
-
-Button(fig.add_subplot(gs[-1]), "Reset",
-       color='lightgray', hovercolor='0.85').on_clicked(reset)
-
-def redraw():
-    x, y, th = state[:3]
-    Pxy = np.array([x, y])
-    Hxy = Pxy + L * np.array([np.cos(th), np.sin(th)])
-    arm_line.set_data([Pxy[0], Hxy[0]], [Pxy[1], Hxy[1]])
-
-    joints = np.vstack([Pxy, Pxy, Hxy, Hxy])
-    for ln, (ax_, ay_), j in zip(str_lines, anchors.values(), joints):
-        ln.set_data([ax_, j[0]], [ay_, j[1]])
-
-redraw()           # initial drawing
-
-def step(_):
-    global state
-    # spool toward target
-    for tag in L_cmd:
-        L_cmd[tag] += np.clip(L_target[tag] - L_cmd[tag],
-                              -SPOOL_RATE*DT,  SPOOL_RATE*DT)
-    solver.step()
-    state = solver.y
-    # runaway guard
-    if abs(state[0]) > VIEW_X or state[1] < -0.6 or state[1] > VIEW_Y:
-        print("Runaway reset")
-        reset(); redraw(); return
-    redraw()
-
-# store in variable `ani` so it isn't garbage collected
-ani = FuncAnimation(fig, step,
-                    interval=1000//FPS,
-                    blit=False,
-                    cache_frame_data=False)
-
-plt.suptitle("Single bar – four strings  (v2.7.3)")
+# initial draw
+update(None)
 plt.show()
 
