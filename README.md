@@ -9,3 +9,7 @@ Robot that mimics poses of people as seen through a webcam
 * [Move Mirror: An AI Experiment with Pose Estimation in the Browser using TensorFlow.js](https://medium.com/tensorflow/move-mirror-an-ai-experiment-with-pose-estimation-in-the-browser-using-tensorflow-js-2f7b769f9b23)
 * [Blazepose tracking with DepthAI](https://github.com/geaxgx/depthai_blazepose)
 * [OpenPose](https://github.com/CMU-Perceptual-Computing-Lab/openpose)
+
+# Roadmap
+
+* String lengths get mapped to hardware (servo motion)
